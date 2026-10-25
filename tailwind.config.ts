@@ -90,4 +90,55 @@ const config: Config = {
         "inner-glow": "inset 0 0 1px rgba(16,185,129,0.15)",
       },
       backgroundImage: {
-        "em
+        "emerald-aura":
+          "radial-gradient(circle at 50% 0%, rgba(16,185,129,0.15), transparent 60%)",
+        "grid-fade":
+          "linear-gradient(to right, rgba(255,255,255,0.03) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.03) 1px, transparent 1px)",
+        "scan-gradient":
+          "linear-gradient(to bottom, transparent 0%, rgba(16,185,129,0.4) 50%, transparent 100%)",
+      },
+      transitionTimingFunction: {
+        "emerald-out": "cubic-bezier(0.16, 1, 0.3, 1)",
+        "emerald-in": "cubic-bezier(0.7, 0, 0.84, 0)",
+        "emerald-in-out": "cubic-bezier(0.65, 0, 0.35, 1)",
+      },
+      keyframes: {
+        "fade-in": {
+          "0%": { opacity: "0" },
+          "100%": { opacity: "1" },
+        },
+        "fade-in-up": {
+          "0%": { opacity: "0", transform: "translateY(8px)" },
+          "100%": { opacity: "1", transform: "translateY(0)" },
+        },
+        "fade-in-down": {
+          "0%": { opacity: "0", transform: "translateY(-8px)" },
+          "100%": { opacity: "1", transform: "translateY(0)" },
+        },
+        "scale-in": {
+          "0%": { opacity: "0", transform: "scale(0.96)" },
+          "100%": { opacity: "1", transform: "scale(1)" },
+        },
+        "glow-pulse": {
+          "0%, 100%": { opacity: "1" },
+          "50%": { opacity: "0.65" },
+        },
+        shimmer: {
+          "0%": { backgroundPosition: "-200% 0" },
+          "100%": { backgroundPosition: "200% 0" },
+        },
+      },
+      animation: {
+        "fade-in": "fade-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) both",
+        "fade-in-up": "fade-in-up 0.5s cubic-bezier(0.16, 1, 0.3, 1) both",
+        "fade-in-down": "fade-in-down 0.5s cubic-bezier(0.16, 1, 0.3, 1) both",
+        "scale-in": "scale-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) both",
+        "glow-pulse": "glow-pulse 3s ease-in-out infinite",
+        shimmer: "shimmer 2.5s linear infinite",
+      },
+    },
+  },
+  plugins: [],
+};
+
+export default config;
