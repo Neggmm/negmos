@@ -2,54 +2,58 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { AlertCircle, ArrowRight, Loader2, Lock } from "lucide-react";
+import {
+  AlertCircle,
+  ArrowRight,
+  Loader2,
+  Lock,
+  Mail,
+} from "lucide-react";
 import { useOs } from "@/store/os-context";
-import { verifyPin } from "@/lib/auth-actions";
-import { cn, OS_NAME, sleep, WELCOME_NAME } from "@/lib/utils";
+import { supabase } from "@/lib/supabase/client";
+import { cn, OS_NAME, sleep } from "@/lib/utils";
 
 // ============================================================
-// PinEntry — secure PIN entry interface
+// LoginEntry — multi-account email + password sign-in
 // ============================================================
 //
-// Security architecture (milestone 1):
-//   1. The PIN is captured in a hidden <input type="password">.
-//      The browser handles masking; we never store the plaintext
-//      anywhere client-side beyond the input's controlled value.
-//   2. On submit, the PIN is sent to the verifyPin server action
-//      (file 14). The server is the ONLY place verification happens.
-//      There is no client-side comparison, ever.
-//   3. On success, we flip isAuthenticated in the OS context and
-//      advance the phase to "desktop". The PIN value is cleared
-//      from local state.
-//   4. On error, we shake the dots, clear the PIN, and show the
-//      server's error message.
+// Architecture:
+//   - Client-side supabase.auth.signInWithPassword({ email, password })
+//   - Supabase verifies the password against the bcrypt hash server-side
+//   - On success: @supabase/ssr sets auth cookies in the browser
+//   - onAuthStateChange (SIGNED_IN) fires in OsProvider, which:
+//       1. Reads the user info from the session
+//       2. Updates the OsProvider's `user` state
+//       3. Sets isAuthenticated=true and phase="desktop"
 //
-// In milestone 2, only the server action body changes — this entire
-// component stays exactly the same.
+// To create a new account: Supabase Dashboard → Authentication →
+// Users → Add user → Create new user (with email + password).
+// Optionally set user_metadata: { display_name, initials, role }.
 
-type PinState = "idle" | "verifying" | "error" | "success";
+type LoginState = "idle" | "verifying" | "error" | "success";
 
 export function PinEntry() {
-  const { setPhase, signIn } = useOs();
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [pin, setPin] = useState("");
-  const [state, setState] = useState<PinState>("idle");
+  const { setPhase } = useOs();
+  const emailRef = useRef<HTMLInputElement>(null);
+  const passwordRef = useRef<HTMLInputElement>(null);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [state, setState] = useState<LoginState>("idle");
   const [error, setError] = useState<string | null>(null);
 
-  // Auto-focus the hidden input on mount so the user can start typing
-  // immediately — keyboard-first, Raycast-style.
+  // Auto-focus email input on mount — keyboard-first
   useEffect(() => {
-    inputRef.current?.focus();
+    emailRef.current?.focus();
   }, []);
 
   const handleSubmit = useCallback(
-    async (value: string) => {
-      // Guard against double-submit and post-success clicks.
+    async (e?: React.FormEvent) => {
+      e?.preventDefault();
       if (state === "verifying" || state === "success") return;
 
-      if (value.trim().length === 0) {
+      if (!email.trim() || !password) {
         setState("error");
-        setError("PIN is required.");
+        setError("Email and password are required.");
         return;
       }
 
@@ -57,60 +61,53 @@ export function PinEntry() {
       setError(null);
 
       try {
-        const result = await verifyPin(value);
-        if (result.success) {
-          setState("success");
-          // Brief celebration — let the dots turn emerald and the
-          // "Access granted" message breathe before the crossfade.
-          await sleep(500);
-          signIn();
-          setPhase("desktop");
-        } else {
+        const { error: signInError } = await supabase.auth.signInWithPassword({
+          email: email.trim(),
+          password,
+        });
+
+        if (signInError) {
           setState("error");
-          setError(result.error ?? "Verification failed.");
-          setPin("");
-          setTimeout(() => inputRef.current?.focus(), 100);
+          const isRateLimit = signInError.message
+            .toLowerCase()
+            .includes("rate limit");
+          setError(
+            isRateLimit
+              ? "Too many attempts. Try again later."
+              : "Invalid email or password.",
+          );
+          setPassword("");
+          setTimeout(() => passwordRef.current?.focus(), 100);
+          return;
         }
+
+        // Success — onAuthStateChange (SIGNED_IN) fires in OsProvider,
+        // which sets the user info and advances to desktop. We also
+        // set a fallback here in case the listener is slow.
+        setState("success");
+        await sleep(500);
+        setPhase("desktop");
       } catch {
-        // Network / unexpected error. Never leak the underlying error
-        // to the UI — show a generic message instead.
         setState("error");
         setError("Network error. Try again.");
-        setPin("");
-        setTimeout(() => inputRef.current?.focus(), 100);
+        setPassword("");
       }
     },
-    [state, signIn, setPhase],
+    [state, email, password, setPhase],
   );
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
       if (e.key === "Enter") {
         e.preventDefault();
-        handleSubmit(pin);
+        handleSubmit();
       } else if (e.key === "Escape" && state === "error") {
         setState("idle");
         setError(null);
-        setPin("");
+        setPassword("");
       }
     },
-    [handleSubmit, pin, state],
-  );
-
-  const handleChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      if (state === "verifying" || state === "success") return;
-      // Cap length at 64 for sanity. Real length validation happens
-      // server-side; this just prevents pathological inputs.
-      const value = e.target.value.slice(0, 64);
-      setPin(value);
-      // Clear error state as soon as the user starts typing again.
-      if (state === "error") {
-        setState("idle");
-        setError(null);
-      }
-    },
-    [state],
+    [handleSubmit, state],
   );
 
   return (
@@ -121,8 +118,7 @@ export function PinEntry() {
       transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
       className="fixed inset-0 flex flex-col items-center justify-center overflow-hidden bg-surface-void"
     >
-      {/* Ambient backdrop — softer than the boot screen, since the user
-          needs to focus here rather than be impressed. */}
+      {/* Ambient backdrop */}
       <div className="absolute inset-0 bg-aura opacity-60" />
       <div
         className="absolute inset-0 bg-grid opacity-30"
@@ -145,7 +141,7 @@ export function PinEntry() {
           <Lock className="h-4 w-4 text-emerald-300" strokeWidth={1.5} />
         </motion.div>
 
-        {/* Identity + label */}
+        {/* Identity */}
         <motion.div
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
@@ -156,112 +152,147 @@ export function PinEntry() {
             {OS_NAME}
           </h1>
           <p className="font-mono text-[10px] uppercase tracking-widest text-ink-tertiary">
-            Enter PIN · {WELCOME_NAME}
+            Sign in to your account
           </p>
         </motion.div>
 
-        {/* PIN dots + hidden input */}
-        <motion.div
+        {/* Form */}
+        <motion.form
+          onSubmit={handleSubmit}
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, delay: 0.2, ease: [0.16, 1, 0.3, 1] }}
-          className="relative w-full"
+          className="flex w-full flex-col gap-4"
         >
-          {/*
-            Hidden input captures all keystrokes; auto-focused on mount.
-            type="password" lets the browser mask; autoComplete="off"
-            prevents credential managers from offering to save the PIN.
-            opacity-0 hides the native dots — our custom DotRow below is
-            the visible affordance.
-          */}
-          <input
-            ref={inputRef}
-            type="password"
-            value={pin}
-            onChange={handleChange}
-            onKeyDown={handleKeyDown}
-            autoComplete="off"
-            spellCheck={false}
-            inputMode="text"
-            aria-label="Enter your PIN"
-            disabled={state === "verifying" || state === "success"}
-            className="absolute inset-0 h-full w-full cursor-default opacity-0"
-          />
+          {/* Email field */}
+          <div className="flex flex-col gap-1.5">
+            <label
+              htmlFor="email"
+              className="font-mono text-[10px] uppercase tracking-widest text-ink-tertiary"
+            >
+              Email
+            </label>
+            <div className="flex items-center gap-2 rounded-lg border border-line-subtle bg-surface-panel/40 px-3 py-2.5 transition-colors focus-within:border-emerald-500/40 focus-within:bg-surface-panel/70">
+              <Mail
+                className="h-3.5 w-3.5 text-ink-tertiary"
+                strokeWidth={1.5}
+              />
+              <input
+                ref={emailRef}
+                id="email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="you@example.com"
+                autoComplete="email"
+                spellCheck={false}
+                disabled={state === "verifying" || state === "success"}
+                className="flex-1 bg-transparent text-[13px] text-ink-primary placeholder:text-ink-quaternary focus:outline-none"
+                style={{ boxShadow: "none" }}
+              />
+            </div>
+          </div>
 
-          {/* Visible dot row — clickable to focus input */}
-          <button
-            type="button"
-            onClick={() => inputRef.current?.focus()}
-            tabIndex={-1}
-            className="flex w-full items-center justify-center rounded-lg py-6 transition-colors hover:bg-surface-hover/40"
-          >
-            <DotRow pin={pin} state={state} />
-          </button>
-        </motion.div>
+          {/* Password field */}
+          <div className="flex flex-col gap-1.5">
+            <label
+              htmlFor="password"
+              className="font-mono text-[10px] uppercase tracking-widest text-ink-tertiary"
+            >
+              Password
+            </label>
+            <div className="flex items-center gap-2 rounded-lg border border-line-subtle bg-surface-panel/40 px-3 py-2.5 transition-colors focus-within:border-emerald-500/40 focus-within:bg-surface-panel/70">
+              <Lock
+                className="h-3.5 w-3.5 text-ink-tertiary"
+                strokeWidth={1.5}
+              />
+              <input
+                ref={passwordRef}
+                id="password"
+                type="password"
+                value={password}
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  if (state === "error") {
+                    setState("idle");
+                    setError(null);
+                  }
+                }}
+                onKeyDown={handleKeyDown}
+                placeholder="••••••••"
+                autoComplete="current-password"
+                spellCheck={false}
+                disabled={state === "verifying" || state === "success"}
+                className="flex-1 bg-transparent font-mono text-[13px] text-ink-primary placeholder:text-ink-quaternary focus:outline-none"
+                style={{ boxShadow: "none" }}
+              />
+            </div>
+          </div>
 
-        {/* Status / error / action line */}
-        <div className="flex min-h-[2.5rem] w-full flex-col items-center justify-center gap-2">
-          <AnimatePresence mode="wait">
-            {state === "idle" && (
-              <motion.button
-                key="submit"
-                type="button"
-                onClick={() => handleSubmit(pin)}
-                disabled={pin.length === 0}
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className={cn(
-                  "group inline-flex items-center gap-2 rounded-full border px-4 py-1.5 font-mono text-[11px] uppercase tracking-widest transition-all",
-                  pin.length === 0
-                    ? "cursor-not-allowed border-transparent text-ink-tertiary"
-                    : "border-emerald-500/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 hover:shadow-glow-sm",
-                )}
-              >
-                Verify
-                <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
-              </motion.button>
-            )}
+          {/* Status / error / action line */}
+          <div className="flex min-h-[2.5rem] items-center justify-center">
+            <AnimatePresence mode="wait">
+              {state === "idle" && (
+                <motion.button
+                  key="submit"
+                  type="submit"
+                  disabled={!email.trim() || !password}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className={cn(
+                    "group inline-flex items-center gap-2 rounded-full border px-4 py-1.5 font-mono text-[11px] uppercase tracking-widest transition-all",
+                    !email.trim() || !password
+                      ? "cursor-not-allowed border-transparent text-ink-tertiary"
+                      : "border-emerald-500/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 hover:shadow-glow-sm",
+                  )}
+                >
+                  Sign in
+                  <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
+                </motion.button>
+              )}
 
-            {state === "verifying" && (
-              <motion.div
-                key="verifying"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-widest text-emerald-300/80"
-              >
-                <Loader2 className="h-3 w-3 animate-spin" />
-                Verifying
-              </motion.div>
-            )}
+              {state === "verifying" && (
+                <motion.div
+                  key="verifying"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-widest text-emerald-300/80"
+                >
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Verifying
+                </motion.div>
+              )}
 
-            {state === "error" && (
-              <motion.div
-                key="error"
-                initial={{ opacity: 0, y: -4 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                className="inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-widest text-status-danger"
-              >
-                <AlertCircle className="h-3 w-3" />
-                {error ?? "Verification failed"}
-              </motion.div>
-            )}
+              {state === "error" && (
+                <motion.div
+                  key="error"
+                  initial={{ opacity: 0, y: -4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                  className="inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-widest text-status-danger"
+                >
+                  <AlertCircle className="h-3 w-3" />
+                  {error ?? "Sign in failed"}
+                </motion.div>
+              )}
 
-            {state === "success" && (
-              <motion.div
-                key="success"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-widest text-emerald-300"
-              >
-                Access granted
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
+              {state === "success" && (
+                <motion.div
+                  key="success"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-widest text-emerald-300"
+                >
+                  Access granted
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        </motion.form>
 
         {/* Hint line */}
         <motion.p
@@ -270,62 +301,9 @@ export function PinEntry() {
           transition={{ duration: 0.6, delay: 0.4 }}
           className="text-center font-mono text-[10px] uppercase tracking-widest text-ink-quaternary"
         >
-          Press Enter to verify · Esc to clear
+          Press Enter to sign in · Esc to clear
         </motion.p>
       </div>
-    </motion.div>
-  );
-}
-
-// --- Dot row --------------------------------------------------------------
-
-function DotRow({ pin, state }: { pin: string; state: PinState }) {
-  // Show at least 4 dots, growing as the user types a longer PIN.
-  // The minimum prevents the layout from jumping when the user clears
-  // the field — there's always a stable baseline row visible.
-  const minDots = 4;
-  const count = Math.max(minDots, pin.length);
-
-  return (
-    <motion.div
-      // Shake on error — classic OS-grade error feedback.
-      animate={
-        state === "error" ? { x: [0, -10, 10, -8, 8, -4, 4, 0] } : { x: 0 }
-      }
-      transition={
-        state === "error"
-          ? { duration: 0.4, ease: "easeInOut" }
-          : { duration: 0.2 }
-      }
-      className="flex items-center gap-2.5"
-    >
-      {Array.from({ length: count }).map((_, i) => {
-        const filled = i < pin.length;
-        const isSuccess = state === "success";
-        const isVerifying = state === "verifying";
-
-        return (
-          <motion.span
-            key={i}
-            initial={false}
-            animate={{
-              scale: filled ? 1 : 0.85,
-              opacity: filled || isSuccess ? 1 : 0.4,
-            }}
-            transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-            className={cn(
-              "block h-2.5 w-2.5 rounded-full transition-colors",
-              isSuccess
-                ? "bg-emerald-400 shadow-glow-sm"
-                : isVerifying && filled
-                  ? "bg-emerald-400/80"
-                  : filled
-                    ? "bg-emerald-500"
-                    : "bg-surface-active",
-            )}
-          />
-        );
-      })}
     </motion.div>
   );
 }
