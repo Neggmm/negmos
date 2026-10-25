@@ -16,28 +16,15 @@ import { WELCOME_NAME } from "@/lib/utils";
 // NEGM OS — Global OS state
 // ============================================================
 //
-// This context is the single source of truth for three slices of
-// OS-wide state:
-//
-//   1. Phase    — which screen we're on (boot | pin | desktop)
-//   2. Auth     — synced with Supabase Auth session state
-//   3. Desktop  — active view, sidebar collapse, command palette
-//
-// Auth flow:
-//   - On mount: call supabase.auth.getSession(). If session exists,
-//     skip boot + pin and go straight to desktop. The boot is a
-//     "cold start" intro — once the user has a session, they don't
-//     need to see it again.
-//   - On verifyPin server action success: PinEntry calls signIn()
-//     which flips isAuthenticated + setPhase("desktop").
-//   - On Lock OS click: signOut() calls supabase.auth.signOut()
-//     client-side. This triggers onAuthStateChange (SIGNED_OUT),
-//     which resets the OS state.
-//
-// Note: server-side sign-in (via the verifyPin server action)
-// does NOT trigger onAuthStateChange on the client — only client-
-// side auth calls do. So we manually update state in signIn().
-// Sign-out IS client-side, so onAuthStateChange fires naturally.
+// Auth flow (multi-account):
+//   - On mount: getSession() — if session exists, read user info
+//     from session.user.user_metadata (or fall back to email),
+//     advance to desktop (skip boot + login).
+//   - On client-side signInWithPassword: onAuthStateChange fires
+//     SIGNED_IN. We read user info from session.user and update
+//     the OsProvider's `user` state, then advance to desktop.
+//   - On signOut: onAuthStateChange fires SIGNED_OUT. We reset
+//     user to defaults and return to login screen.
 
 // --- Types ----------------------------------------------------------------
 
@@ -49,29 +36,25 @@ export interface OsUser {
   name: string;
   initials: string;
   role: string;
+  email?: string;
 }
 
 interface OsState {
-  // Phase machine
   phase: Phase;
   setPhase: (p: Phase) => void;
 
-  // Auth (synced with Supabase Auth session)
   isAuthenticated: boolean;
   user: OsUser;
   signIn: () => void;
   signOut: () => void;
 
-  // Desktop navigation
   activeView: ViewId;
   setActiveView: (v: ViewId) => void;
 
-  // Sidebar
   sidebarCollapsed: boolean;
   toggleSidebar: () => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
 
-  // Command palette
   commandPaletteOpen: boolean;
   setCommandPaletteOpen: (open: boolean) => void;
   toggleCommandPalette: () => void;
@@ -89,6 +72,44 @@ export function useOs(): OsState {
   return ctx;
 }
 
+// --- Helpers ---------------------------------------------------------------
+
+const DEFAULT_USER: OsUser = {
+  name: WELCOME_NAME,
+  initials: "DN",
+  role: "Owner",
+};
+
+/**
+ * makeUserFromSession — derive display info from a Supabase session.
+ *
+ * Priority:
+ *   1. user_metadata.display_name / .initials / .role (if set in Supabase dashboard)
+ *   2. profile table fields (queried separately in milestone 2.2)
+ *   3. Email-derived fallback (local part + first 2 chars)
+ */
+function makeUserFromSession(sessionUser: {
+  email?: string;
+  user_metadata?: Record<string, unknown> | null;
+}): OsUser {
+  const email = sessionUser.email ?? "";
+  const metadata = sessionUser.user_metadata ?? {};
+  const localPart = email.split("@")[0] ?? "User";
+
+  return {
+    name:
+      (metadata.display_name as string | undefined) ||
+      localPart.charAt(0).toUpperCase() + localPart.slice(1) ||
+      "User",
+    initials:
+      (metadata.initials as string | undefined) ||
+      localPart.slice(0, 2).toUpperCase() ||
+      "U",
+    role: (metadata.role as string | undefined) || "User",
+    email,
+  };
+}
+
 // --- Provider -------------------------------------------------------------
 
 interface OsProviderProps {
@@ -101,29 +122,20 @@ export function OsProvider({ children }: OsProviderProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-
-  const user = useMemo<OsUser>(
-    () => ({
-      name: WELCOME_NAME,
-      initials: "DN",
-      role: "Owner",
-    }),
-    [],
-  );
+  const [user, setUser] = useState<OsUser>(DEFAULT_USER);
 
   // On mount, check for an existing Supabase session. If found,
-  // skip the boot screen and go straight to the desktop — the user
-  // is already authenticated from a previous visit.
+  // skip the boot screen and go straight to the desktop.
   //
-  // Also subscribe to onAuthStateChange for client-side sign-out
-  // events. (Server-side sign-in via verifyPin doesn't trigger this
-  // listener; PinEntry manually calls signIn() after success.)
+  // Also subscribe to onAuthStateChange for client-side sign-in and
+  // sign-out events.
   useEffect(() => {
     let mounted = true;
 
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!mounted) return;
-      if (session) {
+      if (session?.user) {
+        setUser(makeUserFromSession(session.user));
         setIsAuthenticated(true);
         setPhase("desktop");
       }
@@ -131,9 +143,15 @@ export function OsProvider({ children }: OsProviderProps) {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((event) => {
+    } = supabase.auth.onAuthStateChange((event, session) => {
       if (!mounted) return;
-      if (event === "SIGNED_OUT") {
+
+      if (event === "SIGNED_IN" && session?.user) {
+        setUser(makeUserFromSession(session.user));
+        setIsAuthenticated(true);
+        setPhase("desktop");
+      } else if (event === "SIGNED_OUT") {
+        setUser(DEFAULT_USER);
         setIsAuthenticated(false);
         setPhase("pin");
         setCommandPaletteOpen(false);
@@ -153,10 +171,7 @@ export function OsProvider({ children }: OsProviderProps) {
   }, []);
 
   const signOut = useCallback(() => {
-    // Fire-and-forget — the onAuthStateChange listener handles
-    // the state cleanup when signOut completes. Using `void`
-    // so the function signature stays `() => void` (works with
-    // onClick handlers that expect void return).
+    // Fire-and-forget — the onAuthStateChange listener handles state cleanup.
     void supabase.auth.signOut();
   }, []);
 
@@ -166,7 +181,7 @@ export function OsProvider({ children }: OsProviderProps) {
     [],
   );
 
-  // Global keyboard shortcuts — registered once for the whole OS.
+  // Global keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
