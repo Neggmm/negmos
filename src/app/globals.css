@@ -1,0 +1,187 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================
+   NEGM OS — Global atmosphere
+   The cinematic canvas everything else gets painted on.
+   ============================================================ */
+
+@layer base {
+  :root {
+    /* Font families — populated by layout.tsx via next/font */
+    --font-sans: ui-sans-serif, system-ui, sans-serif;
+    --font-mono: ui-monospace, monospace;
+    --font-display: ui-sans-serif, system-ui, sans-serif;
+
+    /* App dimensions */
+    --sidebar-w: 224px;
+    --topbar-h: 48px;
+
+    /* Ambient color stops (used by the body backdrop) */
+    --aura-emerald: rgba(16, 185, 129, 0.08);
+    --aura-deep: rgba(5, 6, 8, 0.95);
+
+    /* Hairline border tokens */
+    --line-subtle: rgba(255, 255, 255, 0.05);
+    --line-default: rgba(255, 255, 255, 0.08);
+    --line-strong: rgba(255, 255, 255, 0.12);
+    --line-emerald: rgba(16, 185, 129, 0.25);
+  }
+
+  * {
+    border-color: var(--line-default);
+  }
+
+  html,
+  body {
+    height: 100%;
+    overscroll-behavior: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    background-color: #050608;
+    color: #f4faf7;
+    font-family: var(--font-sans);
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11", "ss01";
+    /* The cinematic ambient backdrop: stacked emerald radials
+       painting light from above and a faint aurora from below,
+       sitting above the deep void. */
+    background-image: radial-gradient(
+        900px 600px at 50% -10%,
+        var(--aura-emerald),
+        transparent 60%
+      ),
+      radial-gradient(
+        1200px 800px at 50% 110%,
+        rgba(16, 185, 129, 0.04),
+        transparent 70%
+      ),
+      linear-gradient(to bottom, var(--aura-deep), #050608);
+    background-attachment: fixed;
+  }
+
+  ::selection {
+    background-color: rgba(16, 185, 129, 0.25);
+    color: #ecfdf5;
+  }
+
+  /* Focus rings — emerald glow, never the default browser blue */
+  :focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.6),
+      0 0 0 4px rgba(16, 185, 129, 0.15);
+  }
+
+  /* Scrollbars — thin, dark, emerald on hover */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(16, 185, 129, 0.35);
+    background-clip: padding-box;
+    border: 2px solid transparent;
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.08) transparent;
+  }
+}
+
+@layer components {
+  /* Glass panel — restrained glassmorphism for the sidebar,
+     top bar, command palette, and any floating surface. */
+  .glass-panel {
+    background-color: rgba(16, 19, 21, 0.7);
+    backdrop-filter: blur(16px) saturate(140%);
+    -webkit-backdrop-filter: blur(16px) saturate(140%);
+    border: 1px solid var(--line-default);
+  }
+
+  /* Hairline borders — visible separation between surfaces */
+  .hairline {
+    border: 1px solid var(--line-subtle);
+  }
+  .hairline-b {
+    border-bottom: 1px solid var(--line-subtle);
+  }
+  .hairline-t {
+    border-top: 1px solid var(--line-subtle);
+  }
+  .hairline-r {
+    border-right: 1px solid var(--line-subtle);
+  }
+  .hairline-l {
+    border-left: 1px solid var(--line-subtle);
+  }
+
+  /* Emerald glow ring — for active states and focus emphasis */
+  .ring-emerald-glow {
+    box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.4),
+      0 0 20px rgba(16, 185, 129, 0.25);
+  }
+
+  /* A 32px luminous grid that fades to transparent — used in
+     the boot screen and home view hero. */
+  .bg-grid {
+    background-image: linear-gradient(
+        to right,
+        rgba(255, 255, 255, 0.03) 1px,
+        transparent 1px
+      ),
+      linear-gradient(
+        to bottom,
+        rgba(255, 255, 255, 0.03) 1px,
+        transparent 1px
+      );
+    background-size: 32px 32px;
+  }
+
+  /* Soft top-down emerald aura for hero areas */
+  .bg-aura {
+    background-image: radial-gradient(
+      circle at 50% 0%,
+      rgba(16, 185, 129, 0.15),
+      transparent 60%
+    );
+  }
+
+  /* Tabular figures — for finance numbers and the live clock */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1, "cv02" 1;
+  }
+
+  /* Cinematic wordmark — for the NEGM OS brand and "WELCOME, DR. NEGM" */
+  .wordmark {
+    font-family: var(--font-display);
+    letter-spacing: 0.32em;
+    font-weight: 200;
+  }
+}
+
+/* Respect reduced motion — strip non-essential animation for
+   users who've requested it in their OS settings. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
