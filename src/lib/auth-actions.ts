@@ -1,40 +1,46 @@
 "use server";
 
-/**
- * verifyPin — server-side PIN verification.
- *
- * ┌──────────────────────────────────────────────────────────────────────┐
- * │ ⚠️  MILESTONE 1 STUB                                                  │
- * │                                                                        │
- * │ This server action is a placeholder for the first visual deployment.  │
- * │ It does NOT actually verify the PIN — it confirms the PIN is          │
- * │ well-formed and returns success. This is acceptable for milestone 1   │
- * │ because there is no Supabase backend yet.                             │
- * │                                                                        │
- * │ In milestone 2, the body of this function will be replaced with:      │
- * │   1. Look up the authenticated user's PIN hash in Supabase            │
- * │   2. Compare the provided PIN against the stored hash using          │
- * │      bcrypt.compare() or argon2                                        │
- * │   3. On failure, increment a rate-limit counter and return an error  │
- * │   4. On success, return { success: true } so the client can flip     │
- * │      the OS phase to "desktop"                                        │
- * │                                                                        │
- * │ The PIN value itself (e.g. "whoisnegm1565") is NEVER hardcoded in     │
- * │ client code, NEVER stored as plaintext in the database, and NEVER     │
- * │ logged to the server console.                                         │
- * └──────────────────────────────────────────────────────────────────────┘
- *
- * @param pin  The PIN string submitted from the PinEntry client component.
- * @returns    `{ success: boolean, error?: string }` — the client uses the
- *             `success` flag to decide whether to advance to the desktop
- *             phase, and uses `error` to display an inline error message.
- */
-export async function verifyPin(
-  pin: string,
-): Promise<{ success: boolean; error?: string }> {
-  // Basic input validation. This is NOT PIN verification — it's just
-  // ensuring the client submitted a plausible value. Real verification
-  // happens in milestone 2 against a server-side hash.
+import { createServerSupabaseClient } from "@/lib/supabase/server";
+
+// ============================================================
+// NEGM OS — PIN verification (Supabase Auth)
+// ============================================================
+//
+// Architecture:
+//   - The PIN is the password for the Supabase Auth account
+//     identified by NEXT_PUBLIC_NEGMOS_AUTH_EMAIL env var.
+//   - This server action calls supabase.auth.signInWithPassword
+//     with the configured email + the user-supplied PIN.
+//   - Supabase verifies the PIN against the bcrypt-stored hash
+//     server-side. NO client-side comparison happens.
+//   - On success, @supabase/ssr sets auth cookies on the response.
+//     The browser persists them.
+//   - On the next request, the middleware reads the cookies and
+//     refreshes the session if needed.
+//
+// Security properties:
+//   1. The PIN is never logged server-side (only success/failure).
+//   2. The email isn't a secret — only the PIN is.
+//   3. The Supabase service handles rate limiting + brute force
+//      protection (configurable per project in Supabase dashboard).
+//   4. The auth cookies are HTTP-only + Secure + SameSite=Lax
+//      (Supabase default — we don't override).
+//
+// Audit logging (milestone 2.5):
+//   - Log every attempt (success + failure) with timestamp, IP,
+//     user agent, and attempt count.
+//   - Rate limit: 5 attempts per 5 minutes per IP.
+//   - Lock out after 10 failures in 1 hour.
+
+interface VerifyPinResult {
+  success: boolean;
+  error?: string;
+}
+
+export async function verifyPin(pin: string): Promise<VerifyPinResult> {
+  // Basic input validation. This is NOT PIN verification — it's
+  // just ensuring the client submitted a plausible value. Real
+  // verification happens at Supabase.
   if (!pin || pin.trim().length === 0) {
     return { success: false, error: "PIN is required." };
   }
@@ -43,13 +49,56 @@ export async function verifyPin(
     return { success: false, error: "PIN must be at least 4 characters." };
   }
 
-  // Simulate network/verification latency so the PIN entry UI shows its
-  // "verifying" state. Milestone 2 will replace this with a real Supabase
-  // query — a few hundred milliseconds in practice, similar to this delay.
-  await new Promise((resolve) => setTimeout(resolve, 600));
+  const email = process.env.NEXT_PUBLIC_NEGMOS_AUTH_EMAIL;
+  if (!email) {
+    console.error(
+      "[NEGM OS] NEXT_PUBLIC_NEGMOS_AUTH_EMAIL env var is not set.",
+    );
+    return {
+      success: false,
+      error: "Authentication is not configured. Contact the administrator.",
+    };
+  }
 
-  // Milestone 1: always succeed for any non-empty, ≥4-char PIN.
-  // Milestone 2 will replace this return with the result of
-  // `bcrypt.compare(pin, storedHash)`.
-  return { success: true };
+  try {
+    const supabase = await createServerSupabaseClient();
+
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password: pin,
+    });
+
+    if (error) {
+      // Map Supabase errors to user-friendly messages.
+      // Never leak the underlying error message — it could reveal
+      // the email format, the existence of the account, or stack traces.
+      const isRateLimit = error.message
+        .toLowerCase()
+        .includes("rate limit");
+      const isUnverified = error.message
+        .toLowerCase()
+        .includes("email not confirmed");
+
+      // TODO milestone 2.5: audit log the failure
+      // await logAuthAttempt({ success: false, reason: error.code });
+
+      return {
+        success: false,
+        error: isRateLimit
+          ? "Too many attempts. Try again later."
+          : isUnverified
+            ? "Account not verified. Check Supabase dashboard."
+            : "Invalid PIN. Try again.",
+      };
+    }
+
+    // TODO milestone 2.5: audit log the success
+    // await logAuthAttempt({ success: true });
+
+    return { success: true };
+  } catch (err) {
+    // Never leak the underlying error to the client.
+    console.error("[NEGM OS] verifyPin error:", err);
+    return { success: false, error: "Network error. Try again." };
+  }
 }
