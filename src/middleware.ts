@@ -16,6 +16,22 @@ import { NextResponse, type NextRequest } from "next/server";
 // they'd be "logged out" on the next request even though they
 // didn't sign out. This keeps them logged in transparently.
 
+// Type for @supabase/ssr's cookiesToSet parameter (see
+// src/lib/supabase/server.ts for explanation).
+interface CookieToSet {
+  name: string;
+  value: string;
+  options?: {
+    domain?: string;
+    expires?: Date | number;
+    httpOnly?: boolean;
+    maxAge?: number;
+    path?: string;
+    sameSite?: boolean | "lax" | "strict" | "none";
+    secure?: boolean;
+  };
+}
+
 export async function middleware(request: NextRequest) {
   const response = NextResponse.next({ request });
 
@@ -35,7 +51,7 @@ export async function middleware(request: NextRequest) {
       getAll() {
         return request.cookies.getAll();
       },
-      setAll(cookiesToSet) {
+      setAll(cookiesToSet: CookieToSet[]) {
         // Set on the request so downstream handlers see the new cookies
         cookiesToSet.forEach(({ name, value }) =>
           request.cookies.set(name, value),
