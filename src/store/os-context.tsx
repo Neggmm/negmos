@@ -9,6 +9,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { supabase } from "@/lib/supabase/client";
 import { WELCOME_NAME } from "@/lib/utils";
 
 // ============================================================
@@ -19,13 +20,24 @@ import { WELCOME_NAME } from "@/lib/utils";
 // OS-wide state:
 //
 //   1. Phase    — which screen we're on (boot | pin | desktop)
-//   2. Auth     — whether the user is signed in (stub for milestone 1;
-//                 replaced by Supabase Auth state in milestone 2)
-//   3. Desktop  — active view, sidebar collapse, command palette open
+//   2. Auth     — synced with Supabase Auth session state
+//   3. Desktop  — active view, sidebar collapse, command palette
 //
-// Every component under <OsProvider> can read or update any of these
-// without prop drilling. The provider also registers global keyboard
-// shortcuts so any component can rely on them being wired.
+// Auth flow:
+//   - On mount: call supabase.auth.getSession(). If session exists,
+//     skip boot + pin and go straight to desktop. The boot is a
+//     "cold start" intro — once the user has a session, they don't
+//     need to see it again.
+//   - On verifyPin server action success: PinEntry calls signIn()
+//     which flips isAuthenticated + setPhase("desktop").
+//   - On Lock OS click: signOut() calls supabase.auth.signOut()
+//     client-side. This triggers onAuthStateChange (SIGNED_OUT),
+//     which resets the OS state.
+//
+// Note: server-side sign-in (via the verifyPin server action)
+// does NOT trigger onAuthStateChange on the client — only client-
+// side auth calls do. So we manually update state in signIn().
+// Sign-out IS client-side, so onAuthStateChange fires naturally.
 
 // --- Types ----------------------------------------------------------------
 
@@ -44,7 +56,7 @@ interface OsState {
   phase: Phase;
   setPhase: (p: Phase) => void;
 
-  // Auth (stub for milestone 1 — wired to Supabase Auth in milestone 2)
+  // Auth (synced with Supabase Auth session)
   isAuthenticated: boolean;
   user: OsUser;
   signIn: () => void;
@@ -69,13 +81,6 @@ interface OsState {
 
 const OsContext = createContext<OsState | null>(null);
 
-/**
- * useOs — read or update OS-wide state.
- *
- * Must be called from a component rendered inside <OsProvider>.
- * Throws on misuse so a missing provider never silently breaks
- * the OS — it fails loud during development, never in production.
- */
 export function useOs(): OsState {
   const ctx = useContext(OsContext);
   if (!ctx) {
@@ -97,8 +102,6 @@ export function OsProvider({ children }: OsProviderProps) {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
 
-  // Static user identity. In milestone 2 this becomes the Supabase user
-  // object, but the shape stays the same so views don't need to change.
   const user = useMemo<OsUser>(
     () => ({
       name: WELCOME_NAME,
@@ -108,14 +111,53 @@ export function OsProvider({ children }: OsProviderProps) {
     [],
   );
 
-  const signIn = useCallback(() => setIsAuthenticated(true), []);
+  // On mount, check for an existing Supabase session. If found,
+  // skip the boot screen and go straight to the desktop — the user
+  // is already authenticated from a previous visit.
+  //
+  // Also subscribe to onAuthStateChange for client-side sign-out
+  // events. (Server-side sign-in via verifyPin doesn't trigger this
+  // listener; PinEntry manually calls signIn() after success.)
+  useEffect(() => {
+    let mounted = true;
+
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!mounted) return;
+      if (session) {
+        setIsAuthenticated(true);
+        setPhase("desktop");
+      }
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event) => {
+      if (!mounted) return;
+      if (event === "SIGNED_OUT") {
+        setIsAuthenticated(false);
+        setPhase("pin");
+        setCommandPaletteOpen(false);
+        setActiveView("home");
+        setSidebarCollapsed(false);
+      }
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  const signIn = useCallback(() => {
+    setIsAuthenticated(true);
+  }, []);
 
   const signOut = useCallback(() => {
-    setIsAuthenticated(false);
-    setPhase("pin");
-    setCommandPaletteOpen(false);
-    setActiveView("home");
-    setSidebarCollapsed(false);
+    // Fire-and-forget — the onAuthStateChange listener handles
+    // the state cleanup when signOut completes. Using `void`
+    // so the function signature stays `() => void` (works with
+    // onClick handlers that expect void return).
+    void supabase.auth.signOut();
   }, []);
 
   const toggleSidebar = useCallback(() => setSidebarCollapsed((c) => !c), []);
@@ -125,13 +167,6 @@ export function OsProvider({ children }: OsProviderProps) {
   );
 
   // Global keyboard shortcuts — registered once for the whole OS.
-  //
-  //   ⌘K / Ctrl+K  — toggle command palette
-  //   ⌘B / Ctrl+B  — toggle sidebar collapse
-  //   Escape       — close the command palette if it's open
-  //
-  // These are registered globally because the command palette and
-  // sidebar state live in this context, not in any single component.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
@@ -156,10 +191,6 @@ export function OsProvider({ children }: OsProviderProps) {
     return () => window.removeEventListener("keydown", handler);
   }, []);
 
-  // Memoize the value object so consumers only re-render when a slice
-  // they actually use changes. The setState setters and useCallback
-  // callbacks are stable across renders, so only the primitive state
-  // values trigger a new object reference.
   const value = useMemo<OsState>(
     () => ({
       phase,
