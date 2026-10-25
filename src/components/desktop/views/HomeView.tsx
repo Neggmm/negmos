@@ -28,6 +28,7 @@ import {
 } from "@/lib/mock-data";
 import {
   cn,
+  formatCurrency,
   formatDate,
   formatRelativeTime,
   formatTime,
