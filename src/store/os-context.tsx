@@ -85,8 +85,7 @@ const DEFAULT_USER: OsUser = {
  *
  * Priority:
  *   1. user_metadata.display_name / .initials / .role (if set in Supabase dashboard)
- *   2. profile table fields (queried separately in milestone 2.2)
- *   3. Email-derived fallback (local part + first 2 chars)
+ *   2. Email-derived fallback (local part + first 2 chars)
  */
 function makeUserFromSession(sessionUser: {
   email?: string;
@@ -124,11 +123,6 @@ export function OsProvider({ children }: OsProviderProps) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [user, setUser] = useState<OsUser>(DEFAULT_USER);
 
-  // On mount, check for an existing Supabase session. If found,
-  // skip the boot screen and go straight to the desktop.
-  //
-  // Also subscribe to onAuthStateChange for client-side sign-in and
-  // sign-out events.
   useEffect(() => {
     let mounted = true;
 
@@ -171,7 +165,6 @@ export function OsProvider({ children }: OsProviderProps) {
   }, []);
 
   const signOut = useCallback(() => {
-    // Fire-and-forget — the onAuthStateChange listener handles state cleanup.
     void supabase.auth.signOut();
   }, []);
 
@@ -181,7 +174,6 @@ export function OsProvider({ children }: OsProviderProps) {
     [],
   );
 
-  // Global keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
