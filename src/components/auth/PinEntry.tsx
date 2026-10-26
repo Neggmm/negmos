@@ -14,7 +14,7 @@ import { supabase } from "@/lib/supabase/client";
 import { cn, OS_NAME, sleep } from "@/lib/utils";
 
 // ============================================================
-// LoginEntry — multi-account email + password sign-in
+// PinEntry — multi-account email + password sign-in
 // ============================================================
 //
 // Architecture:
